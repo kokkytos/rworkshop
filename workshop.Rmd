@@ -1,0 +1,333 @@
+---
+title: "Raster και Raster Stack στην R"
+output:
+  html_document:
+    df_print: paged
+---
+# Εγκατάσταση των απαραίτητων βιβλιοθηκών
+
+```{r eval=FALSE}
+install.packages(c("raster","ggplot2","rasterVis","rgdal","leaflet"),dependencies=T)
+```
+
+
+# Εισαγωγή των απαραίτητων βιβλιοθηκών
+
+```{r message=FALSE, warning=FALSE}
+library(raster)
+library(ggplot2)
+library(rasterVis)
+library(rgdal)
+library(leaflet)
+```
+
+# Ορισμός Working directory
+
+
+```{r}
+# Επιβεβαίωση ποιο είναι το working directory
+getwd()
+```
+
+
+# Δημιουργία rasterStack Object
+
+```{r}
+myfiles <- list.files(path=file.path("data","dmsp_ols"),  pattern="*.stable_lights.tif$", full.names = TRUE)
+s <- raster::stack(myfiles)
+```
+
+# Οπτικοποίηση raster stack
+
+```{r}
+plot(s)
+```
+
+
+# Μερικές ιδιότητες του rasterStack
+
+```{r}
+class(s) # ποιάς κλάσης ειναι object?
+s@ncols  # πλήθος στηλών 
+s@nrows  # πλήθος γραμμών
+s@extent # όρια γεωγραφικής έκτασης
+
+dim(s) # nrows, ncols, nlayers
+
+
+names(s)   # όνομα των επιμέρους raster
+nlayers(s) # πλήθος raster
+
+res(s) # resolution των raster
+inMemory(s) # επαληθέουμε αν τα δεδομένα είναι στην μνήμη
+fromDisk(s) # επαληθέουμε αν τα δεδομένα είναι στον δίσκο
+```
+
+
+
+# Υποσύνολο από layers του stack
+```{r}
+sub_s <- subset(s, c(1:5))
+plot(sub_s)
+sub_s
+rm(sub_s) #διαγραφή object από το περιβάλλον
+#sub_s
+```
+
+# Αποκοπή του rasterStack στα όρια του Ν. Μαγνησίας
+
+## Ανάγνωση διανυσματικών δεδομένων geopackage
+
+```{r}
+pe <- readOGR(file.path("data","per_enot", "pe.gpkg"), "pe", encoding="UTF-8", use_iconv=TRUE)
+# ?readOGR
+crs(pe)
+plot(pe)
+```
+
+## Reprojection σε WGS'84 και επιλογή του Ν. Μαγνησίας 
+```{r}
+pe_wgs <- sp::spTransform(pe, CRS("+init=epsg:4326"))
+crs(pe_wgs)
+View(pe_wgs@data)
+
+magnisia <- subset(pe_wgs, KALCODE==c(24)) #επιλογή του Ν. Μαγνησίας
+plot(magnisia)
+print(magnisia)
+
+```
+
+
+## Ορισμός των ορίων της περιοχής μέσω της δημιουργίας ενός extent object
+
+
+```{r}
+#ext<-extent(22.61,24.34,37.33,38.69) #Attiki
+ext <- raster::extent(magnisia)
+str(ext)
+
+plot(pe_wgs)
+plot(as(ext, 'SpatialPolygons'),col=rgb(1, 0, 0, alpha=0.5), add=T)
+```
+
+## Αποκοπή του raster stack με βάση το extent object
+
+
+```{r}
+
+s_cropped <-crop(s, ext) # εδώ διατηρεί το αρχικό resolution και προσαρμόζει τα άκρα, επίσης μετατρέπει το stack σε brick
+
+inMemory(s_cropped) # επαληθέουμε αν τα δεδομένα είναι στην μνήμη
+fromDisk(s_cropped) # επαληθέουμε αν τα δεδομένα είναι στον δίσκο
+
+s_cropped@extent
+names(s_cropped)
+res(s_cropped)
+nlayers(s_cropped)
+```
+
+# Προβολή του raster stack στο  ΕΓΣΑ' 87
+
+```{r  warning=F}
+# ορισμός παραμέτρων proj4 για τα προβολικά συστήματα
+greekgrid <- "+proj=tmerc +lat_0=0 +lon_0=24 +k=0.9996 +x_0=500000 +y_0=0 +ellps=GRS80 +towgs84=-199.87,74.79,246.62,0,0,0,0 +units=m +no_defs"
+wgs84 <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 "
+
+# reprojection από WGS84 σε ΕΓΣΑ '87
+sp <- as(ext, "SpatialPolygons")
+sp::proj4string(sp) <- wgs84
+sp_greek_grid <- sp::spTransform(sp, CRS(greekgrid))
+ext_greek_grid <- extent(sp_greek_grid)
+
+# raster template μέσω του οποίου θα γίνει προβολή στο ΕΓΣΑ'87
+raster_template <-  raster()
+extent(raster_template) <-ext_greek_grid
+crs(raster_template) <- greekgrid
+res(raster_template) <- 1000
+
+# προβολή
+s <- projectRaster(from=s, to=raster_template, method="ngb") 
+```
+
+# Προβολή των δεδομένων με την βιβλιοθήκη leaflet
+```{r}
+plot(s[[1]])
+leaflet() %>% 
+  addTiles() %>%
+  addRasterImage(s[[1]], opacity = 0.6)
+```
+
+# Σύγκριση rasters
+
+```{r}
+compareRaster(s[[1]], s[[15]], extent=TRUE )
+compareRaster(s[[1]], s[[15]], rowcol=TRUE )
+compareRaster(s[[1]], s[[15]], crs=TRUE)
+compareRaster(s[[1]], s[[15]], res=TRUE)
+compareRaster(s[[1]], s[[15]], orig=TRUE)
+compareRaster(s[[1]], s[[15]], values=T,stopiffalse = F)
+
+```
+
+# Επαναδειγματοληψία (Resample) rasters
+
+```{r}
+
+resampleFactor <- 0.5  # reduce the cell size by 50% and double the number of rows and columns.      
+inputRaster <- s      
+inCols <- ncol(s)
+inRows <- nrow(s)
+resampledRaster <- raster(ncol=(inCols / resampleFactor), nrow=(inRows / resampleFactor))
+extent(resampledRaster) <- extent(inputRaster)
+
+resampledRaster <- resample(s,resampledRaster)
+res(resampledRaster)
+
+```
+
+
+# Μέσος όρος ανά έτος με την χρήση stackApply
+
+```{r}
+names(s)
+years <- substr(names(s),4,7)
+
+
+#Α' τρόπος
+indices <- c(1,2,3,3,4,5,6,7,8,6,7,8,9,10,11,12,9,10,11,12,13,14,15,16,13,14,15,16,17,18,19,20,21,22)
+
+# B' τρόπος
+indices <- factor(years)
+levels(indices) <-1:length(levels(indices))
+
+nlayers(s)
+
+s<-stackApply(s, as.integer(indices), fun = mean, na.rm = TRUE)
+
+nlayers(s)
+
+names(s) <-unique(years)
+
+```
+
+
+
+
+# Reclassify τιμών 
+
+Ορίζουμε όσες τιμές στο raster είναι μικρότερες/ίσες του 6 στα raster layers σε NA (Not Available/Missing Values).
+
+## 1ος τρόπος
+```{r}
+rc1 <- s
+
+rc1[rc1<=6] <- NA #δεν ειναι memory safe
+```
+
+## 2ος τρόπος
+```{r}
+s_calc <- raster::calc(s, fun=function(x){x[x<=6]<-NA; return(x)}) 
+```
+
+## 3ος τρόπος
+
+```{r}
+
+rc2 <- raster::reclassify(s, c(-Inf,6,NA))
+names(rc2) <-names(s)
+
+plot(s[[11]]) # plot  ενδέκατο raster από το αρχικό stack
+plot(s_calc[[11]]) #plot από το αρχικό stack, από το φιλτραρισμένο, εναλλακτικά plot(s_calc$index_1992)
+
+compareRaster(rc1, rc2, values=T)
+compareRaster(s_calc,rc2, values=T)
+compareRaster(s_calc,s, values=T,stopiffalse = F)
+```
+
+
+
+# Οπτικοποίηση με το levelplot
+
+```{r}
+
+rasterVis::levelplot(s_calc) # προσοχή μπορεί να αργήσει αν ειναι πολλά raster
+
+names(s)
+(years <- substring(names(s),2))
+rasterVis::levelplot(s_calc,main="Raster δεδομενα DMSP/OLS για την Μαγνησία, 1992-2013", 
+
+                     scales=list(y=list(draw=FALSE),
+                                 x=list(draw=FALSE)),  
+                     names.attr=years,
+                     colorkey=NULL)
+
+```
+
+
+
+# Υπολογισμός SoL μέσω cellStats
+
+```{r}
+
+SoL <- cellStats(s_calc, stat='sum', na.rm=TRUE)
+
+df<-data.frame(SoL=SoL, Year=as.integer(years) )#δημιουργία dataframe
+write.csv(df,file.path('output','SoL.csv')) # εγγραφή σε csv
+
+```
+
+
+# Οπτικοποίηση δεδομένων SoL σε γράφημα
+
+## Γράφημα με τυπικά εργαλεία plot της R
+
+```{r}
+
+#jpeg('SoL.jpg')
+#dev.off
+plot(x=df$Year,
+       y=df$SoL, 
+       type='l',
+       xlab="Year", 
+       ylab="Sum of Lights (SoL)",
+       main='SoL for Magnesia',xaxt="n")
+  axis(1, at=df$Year,cex.axis=0.8, las=2)
+points(x=df$Year,y=df$SoL)
+
+
+
+```
+
+## Γράφημα με ggplot
+
+```{r}
+
+ggplot2::ggplot(data=df, aes(x=Year,y=SoL))+
+  geom_line()+
+  geom_point()+
+  ggtitle("Sum of Lights (SoL) for Magnesia")+ 
+  scale_x_continuous("Years", labels = as.character(df$Year), breaks = df$Year)+
+  theme(plot.title = element_text(hjust = 0.5))+theme(text = element_text(size=14),
+                                                      axis.text.x = element_text(angle=90)) 
+```
+
+# Αποθήκευση γραφήματος
+
+```{r}
+
+ggplot2::ggsave(file.path("output",'SoL.png'), plot = last_plot(), device = "png", 
+       scale = 1, width = 20, height = 10, units = c( "cm"),
+       dpi = 300, limitsize = TRUE)
+
+```
+
+
+# Αποθήκευση των layer του Raster Stack σαν ξεχωριστά αρχεία geotiff
+
+```{r}
+
+# προσοχή στο data(t)ype όχι data(T)ype
+raster::writeRaster(s_calc, filename=file.path("output",years), bylayer=TRUE,datatype="INT1U", options="COMPRESS=LZW", format="GTiff",overwrite=TRUE)
+
+```
+
